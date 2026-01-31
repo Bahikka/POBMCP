@@ -13,6 +13,23 @@ local function mapAST(ast)
 	return "SkillType."..(skillTypeMap[ast._rowIndex] or ("Unknown"..ast._rowIndex))
 end
 
+local function cleanAndSplit(str) -- Same as in Flavour Text exporter.
+	-- Normalize newlines
+	str = str:gsub("\r\n", "\n")
+
+	local lines = {}
+	for line in str:gmatch("[^\n]+") do
+		line = line:match("^%s*(.-)%s*$") -- trim each line
+		if line ~= "" then
+			-- Escape quotes
+			line = line:gsub('"', '\\"')
+			table.insert(lines, line)
+		end
+	end
+
+	return lines
+end
+
 local weaponClassMap = {
 	["Claw"] = "Claw",
 	["Dagger"] = "Dagger",
@@ -30,6 +47,7 @@ local weaponClassMap = {
 	["Unarmed"] = "None",
 	["Flail"] = "Flail",
 	["Spear"] = "Spear",
+	["Talisman"] = "Talisman",
 }
 
 local gems = { }
@@ -46,7 +64,7 @@ function checkModInStatDescription(statDescription, line)
 		return true
 	end
 
-	local searchIn = statDescription
+	local searchIn = statDescription:gsub(".csd","")
 	local stat
 
 	repeat
@@ -271,7 +289,7 @@ directiveTable.skill = function(state, args, out)
 		--end
 		table.insert(skill.levels, level)
 	end
-	if not skill.qualityStats and not granted.IsSupport then
+	if not (skillGem and granted.IsSupport) then
 		skill.qualityStats = { }
 		local qualityStats = dat("GrantedEffectQualityStats"):GetRow("GrantedEffect", granted)
 		if qualityStats and qualityStats.GrantedStats then
@@ -319,6 +337,13 @@ directiveTable.skill = function(state, args, out)
 			end
 			if supportGem.Lineage then
 				out:write('\tisLineage = true,\n')
+				if supportGem.FlavourText then
+					out:write('\tflavourText = {')
+					for _, line in ipairs(cleanAndSplit(supportGem.FlavourText.Text)) do
+						out:write('"', line, '", ')
+					end
+					out:write('},\n')
+				end
 			end
 		end
 		if skill.isTrigger then
@@ -340,7 +365,7 @@ directiveTable.skill = function(state, args, out)
 		end
 		if next(weaponTypes) then
 			out:write('\tweaponTypes = {\n')
-			for type in pairs(weaponTypes) do
+			for type in pairsSortByKey(weaponTypes) do
 				out:write('\t\t["', type, '"] = true,\n')
 			end
 			out:write('\t},\n')
@@ -376,7 +401,7 @@ directiveTable.skill = function(state, args, out)
 		end
 		if next(weaponTypes) then
 			out:write('\tweaponTypes = {\n')
-			for type in pairs(weaponTypes) do
+			for type in pairsSortByKey(weaponTypes) do
 				out:write('\t\t["', type, '"] = true,\n')
 			end
 			out:write('\t},\n')
@@ -402,7 +427,7 @@ directiveTable.skill = function(state, args, out)
 		for _, statVal in ipairs(level) do
 			out:write(tostring(statVal), ', ')
 		end
-		for k, v in pairs(level.extra) do
+		for k, v in pairsSortByKey(level.extra) do
 			out:write(k, ' = ', tostring(v), ', ')
 		end
 		if level.actorLevel ~= nil then
@@ -410,7 +435,7 @@ directiveTable.skill = function(state, args, out)
 		end
 		if next(level.cost) ~= nil then
 			out:write('cost = { ')
-			for k, v in pairs(level.cost) do
+			for k, v in pairsSortByKey(level.cost) do
 				out:write(k, ' = ', tostring(v), ', ')
 			end
 			out:write('}, ')
@@ -466,6 +491,16 @@ directiveTable.set = function(state, args, out)
 		grantedEffectStatSet.ImplicitStats = tableConcat(skill.baseGrantedEffectStatSet.ImplicitStats, grantedEffectStatSet.ImplicitStats)
 		grantedEffectStatSet.ConstantStats = tableConcat(skill.baseGrantedEffectStatSet.ConstantStats, grantedEffectStatSet.ConstantStats)
 		grantedEffectStatSet.ConstantStatsValues = tableConcat(skill.baseGrantedEffectStatSet.ConstantStatsValues, grantedEffectStatSet.ConstantStatsValues)
+		
+		if grantedEffectStatSet.BaseEffectiveness == 1 then
+			grantedEffectStatSet.BaseEffectiveness = skill.baseGrantedEffectStatSet.BaseEffectiveness 
+		end
+		if grantedEffectStatSet.IncrementalEffectiveness == 0 then
+			grantedEffectStatSet.IncrementalEffectiveness = skill.baseGrantedEffectStatSet.IncrementalEffectiveness 
+		end
+		if grantedEffectStatSet.DamageIncrementalEffectiveness == 0 then
+			grantedEffectStatSet.DamageIncrementalEffectiveness = skill.baseGrantedEffectStatSet.DamageIncrementalEffectiveness 
+		end
 	end
 	
 	local statMap = { }
@@ -478,10 +513,10 @@ directiveTable.set = function(state, args, out)
 		level.level = statRow.GemLevel
 		-- stat based level info
 		if state.skill.setIndex ~= 1 and statRow.AttackCritChance ~= 0 then
-			level.extra.critChance = statRow.AttackCritChance / 100
+			level.extra.critChance = (baseStatRow.AttackCritChance + statRow.AttackCritChance) / 100
 		end
 		if state.skill.setIndex ~= 1 and statRow.OffhandCritChance ~= 0 then
-			level.extra.critChance = statRow.OffhandCritChance / 100
+			level.extra.critChance = (baseStatRow.OffhandCritChance + statRow.OffhandCritChance) / 100
 		end
 		-- If UseSetAttackMulti is true, then take the multi from the stat set, otherwise add the value from base set and current set
 		if state.skill.setIndex ~= 1 and grantedEffectStatSet.UseSetAttackMulti and statRow.BaseMultiplier and statRow.BaseMultiplier ~= 0 then
@@ -501,10 +536,25 @@ directiveTable.set = function(state, args, out)
 			statRow.InterpolationBases = tableConcat(baseStatRow.InterpolationBases, statRow.InterpolationBases)
 			statRow.AdditionalStats = tableConcat(baseStatRow.AdditionalStats, statRow.AdditionalStats)
 			statRow.AdditionalStatsValues = tableConcat(baseStatRow.AdditionalStatsValues, statRow.AdditionalStatsValues)
+			statRow.BaseStats = tableConcat(tableConcat(tableConcat(skill.baseGrantedEffectStatSet.ImplicitStats, skill.baseGrantedEffectStatSet.ConstantStats), baseStatRow.FloatStats), baseStatRow.AdditionalStats)
 		end
 		level.statInterpolation = statRow.StatInterpolations
 		level.actorLevel = statRow.ActorLevel
 		local tempRemoveStats = copyTable(set.removeStats, true)
+		for i, removeStat in pairs(set.removeStats) do
+			-- Fixes the case where a removeStat does not exist in the base set but does in future sets
+			-- It should not be removed if this is the case
+			local remove = false
+			for _, stat in ipairs(statRow.BaseStats) do
+				if stat.Id == removeStat then
+					remove = true
+				end
+			end
+			if remove == false then
+				table.remove(tempRemoveStats, i)
+				table.remove(set.removeStats, i)
+			end
+		end
 		local resolveInterpolation = true
 		local injectConstantValuesIntoEachLevel = false
 		local statMapOrderIndex = 1
@@ -679,11 +729,23 @@ directiveTable.set = function(state, args, out)
 		out:write('\t\t\tdamageIncrementalEffectiveness = ', grantedEffectStatSet.DamageIncrementalEffectiveness, ',\n')
 	end
 	if state.granted.IsSupport then
-		state.statDescriptionScope = "gem_stat_descriptions"
+		local gemEffect = dat("GemEffects"):GetRowList("AdditionalGrantedEffects", state.granted )
+		if gemEffect[1] and gemEffect[1].Tags then
+			for _, tag in ipairs(gemEffect[1].Tags) do
+				if tag.Id == "meta" then
+					skill.isMeta = true
+				end
+			end
+		end
+		if skill.isMeta then
+			state.statDescriptionScope = "meta_gem_stat_descriptions"
+		else
+			state.statDescriptionScope = "gem_stat_descriptions"
+		end
 	else
-		state.statDescriptionScope = state.granted.ActiveSkill.StatDescription:gsub("^Metadata/StatDescriptions/", ""):
+		state.statDescriptionScope = state.granted.ActiveSkill.StatDescription:gsub("^Data/StatDescriptions/", ""):
 		-- Need to subtract 1 from setIndex because GGG indexes from 0
-		gsub("specific_skill_stat_descriptions/", ""):gsub("statset_0", "statset_"..(skill.setIndex - 1)):gsub("/$", ""):gsub("/", "_"), '",\n'
+		gsub("specific_skill_stat_descriptions/", ""):gsub("statset_0", "statset_"..(skill.setIndex - 1)):gsub("/$", ""):gsub("/", "_"):gsub(".csd", ""), '",\n'
 	end
 	out:write('\t\t\tstatDescriptionScope = "' .. state.statDescriptionScope .. '",\n')
 	skill.setIndex = skill.setIndex + 1
@@ -775,7 +837,7 @@ directiveTable.mods = function(state, args, out)
 			for _, statVal in ipairs(level) do
 				out:write(tostring(statVal), ', ')
 			end
-			for k, v in pairs(level.extra) do
+			for k, v in pairsSortByKey(level.extra) do
 				out:write(k, ' = ', tostring(v), ', ')
 			end
 			if next(level.statInterpolation) ~= nil then
@@ -845,6 +907,15 @@ for skillGem in dat("SkillGems"):Rows() do
 			if gemEffect.AdditionalGrantedEffects then
 				for count, additionalGrantedEffect in ipairs(gemEffect.AdditionalGrantedEffects) do
 					out:write('\t\tadditionalGrantedEffectId' .. tostring(count) .. ' = "', additionalGrantedEffect.Id, '",\n')
+				end
+			end
+			if gemEffect.GrantedEffectDisplayOrder then
+				local grantedEffectDisplayOrder = { }
+				for _, order in ipairs(gemEffect.GrantedEffectDisplayOrder) do
+					table.insert(grantedEffectDisplayOrder, order)
+				end
+				if next(grantedEffectDisplayOrder) then
+					out:write('\t\tgrantedEffectDisplayOrder = { ', table.concat(grantedEffectDisplayOrder, ", "), ' },\n')
 				end
 			end
 			if #gemEffect.SecondarySupportName > 0 then

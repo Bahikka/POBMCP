@@ -24,7 +24,7 @@ return {
 	},
 	[5]={
 		stats={
-			[1]="toxic_domain_max_damage_+%_final_from_stored_poison"
+			[1]="toxic_pustule_max_burst_damage_+%_final_from_stored_poison"
 		}
 	},
 	[6]={
@@ -41,7 +41,12 @@ return {
 					k="divide_by_ten_1dp_if_required",
 					v=1
 				},
+				["gem_quality"]=true,
 				limit={
+					[1]={
+						[1]=10,
+						[2]=10
+					}
 				},
 				text="{0:+d} metre to Toxic Bloom radius"
 			},
@@ -50,7 +55,12 @@ return {
 					k="divide_by_ten_1dp_if_required",
 					v=1
 				},
+				["gem_quality"]=true,
 				limit={
+					[1]={
+						[1]="#",
+						[2]="#"
+					}
 				},
 				text="{0:+d} metres to Toxic Bloom radius"
 			},
@@ -226,6 +236,6 @@ return {
 	["skill_specific_stat_description_mode"]=10,
 	["toxic_domain_healing_per_minute_+"]=11,
 	["toxic_domain_mana_cost_+%"]=12,
-	["toxic_domain_max_damage_+%_final_from_stored_poison"]=5,
-	["toxic_domain_pustule_chance_%"]=13
+	["toxic_domain_pustule_chance_%"]=13,
+	["toxic_pustule_max_burst_damage_+%_final_from_stored_poison"]=5
 }

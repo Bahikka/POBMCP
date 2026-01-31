@@ -160,11 +160,11 @@ local ImportTabClass = newClass("ImportTab", "ControlHost", "Control", function(
 	self.controls.exportFrom:SelByValue(self.exportWebsiteSelected or main.lastExportWebsite or "Pastebin", "id")
 	self.controls.generateCodeByLink = new("ButtonControl", { "LEFT", self.controls.exportFrom, "RIGHT"}, {8, 0, 100, 20}, "Share", function()
 		local exportWebsite = exportWebsitesList[self.controls.exportFrom.selIndex]
-		local response = buildSites.UploadBuild(self.controls.generateCodeOut.buf, exportWebsite)
-		if response then
+		local subScriptId = buildSites.UploadBuild(self.controls.generateCodeOut.buf, exportWebsite)
+		if subScriptId then
 			self.controls.generateCodeOut:SetText("")
 			self.controls.generateCodeByLink.label = "Creating link..."
-			launch:RegisterSubScript(response, function(pasteLink, errMsg)
+			launch:RegisterSubScript(subScriptId, function(pasteLink, errMsg)
 				self.controls.generateCodeByLink.label = "Share"
 				if errMsg then
 					main:OpenMessagePopup(exportWebsite.id, "Error creating link:\n"..errMsg)
@@ -583,6 +583,79 @@ function ImportTabClass:DownloadItems()
 	end)
 end
 
+function ImportTabClass:ImportQuestRewardConfig(questStats)
+	local configTab = self.build.configTab
+	local statLines = {}
+	for _, stat in ipairs(questStats) do
+		t_insert(statLines, escapeGGGString(stat):lower())
+	end
+
+	local function splitLine(text)
+		local out = {}
+		for line in text:gmatch("[^\r\n]+") do
+			line = line:gsub("^%s+", ""):lower()
+			t_insert(out, line)
+		end
+		return out
+	end
+
+	-- Ensure all required lines exist, then remove them so they can't match again
+	local function matchQuest(requiredLines)
+		local indices = {}
+		for _, needed in ipairs(requiredLines) do
+			local found
+			for idx, line in ipairs(statLines) do
+				if line == needed then
+					found = idx
+					break
+				end
+			end
+			if not found then
+				return false
+			end
+			t_insert(indices, found)
+		end
+		table.sort(indices, function(a, b) return a > b end)
+		for _, idx in ipairs(indices) do
+			t_remove(statLines, idx)
+		end
+		return true
+	end
+
+	local updated = false
+	for _, quest in ipairs(data.questRewards) do
+		if quest.useConfig == true then
+			local var = "quest" .. quest.Description .. quest.Area .. quest.Info
+			if quest.Stat then
+				local matches = matchQuest(splitLine(quest.Stat))
+				if configTab.input[var] ~= matches then
+					configTab.input[var] = matches
+					updated = true
+				end
+			elseif quest.Options then
+				local selected = configTab.defaultState[var] or "None"
+				for _, option in ipairs(quest.Options) do
+					if matchQuest(splitLine(option)) then
+						selected = option
+						break
+					end
+				end
+				if configTab.input[var] ~= selected then
+					configTab.input[var] = selected
+					updated = true
+				end
+			end
+		end
+	end
+
+	if updated then
+		configTab:BuildModList()
+		configTab:UpdateControls()
+		configTab.modFlag = true
+		self.build.buildFlag = true
+	end
+end
+
 function ImportTabClass:ImportPassiveTreeAndJewels(charData)
 	local charPassiveData = charData.passives
 	self.charImportStatus = colorCodes.POSITIVE.."Passive tree and jewels successfully imported."
@@ -639,6 +712,7 @@ function ImportTabClass:ImportPassiveTreeAndJewels(charData)
 	end
 
 	self.build.spec:AddUndoState()
+	self:ImportQuestRewardConfig(charPassiveData.quest_stats)
 	self.build.characterLevel = charData.level
 	self.build.characterLevelAutoMode = false
 	self.build.configTab:UpdateLevel()
@@ -756,6 +830,9 @@ function ImportTabClass:ImportItemsAndSkills(charData)
 					else
 						gemInstance.level = tonumber(property.values[1][1]:match("%d+"))
 					end
+					if skillData.properties[_ + 2] and skillData.properties[_ + 2].values[1][1]:match("(%d+) Level[s]? from Corruption") then
+						gemInstance.level = gemInstance.level + tonumber(skillData.properties[_ + 2].values[1][1]:match("(%d+) Level[s]? from Corruption"))
+					end
 				elseif escapeGGGString(property.name) == "Quality" then
 					gemInstance.quality = tonumber(property.values[1][1]:match("%d+"))
 				end
@@ -837,7 +914,7 @@ function ImportTabClass:ImportItemsAndSkills(charData)
 end
 
 local rarityMap = { [0] = "NORMAL", "MAGIC", "RARE", "UNIQUE", [9] = "RELIC", [10] = "RELIC" }
-local slotMap = { ["Weapon"] = "Weapon 1", ["Offhand"] = "Weapon 2", ["Weapon2"] = "Weapon 1 Swap", ["Offhand2"] = "Weapon 2 Swap", ["Helm"] = "Helmet", ["BodyArmour"] = "Body Armour", ["Gloves"] = "Gloves", ["Boots"] = "Boots", ["Amulet"] = "Amulet", ["Ring"] = "Ring 1", ["Ring2"] = "Ring 2", ["Ring3"] = "Ring 3", ["Belt"] = "Belt" }
+local slotMap = { ["Weapon"] = "Weapon 1", ["Offhand"] = "Weapon 2", ["Weapon2"] = "Weapon 1 Swap", ["Offhand2"] = "Weapon 2 Swap", ["Helm"] = "Helmet", ["BodyArmour"] = "Body Armour", ["Gloves"] = "Gloves", ["Boots"] = "Boots", ["Amulet"] = "Amulet", ["Ring"] = "Ring 1", ["Ring2"] = "Ring 2", ["Ring3"] = "Ring 3", ["Belt"] = "Belt", ["IncursionArmLeft"] = "Arm 2", ["IncursionArmRight"] = "Arm 1", ["IncursionLegLeft"] = "Leg 2", ["IncursionLegRight"] = "Leg 1" }
 
 function ImportTabClass:ImportItem(itemData, slotName)
 	if not slotName then
@@ -956,8 +1033,10 @@ function ImportTabClass:ImportItem(itemData, slotName)
 	end
 	item.mirrored = itemData.mirrored
 	item.corrupted = itemData.corrupted
+	item.doubleCorrupted = itemData.doubleCorrupted
 	item.fractured = itemData.fractured
 	item.desecrated = itemData.desecrated
+	item.mutated = itemData.mutated
 	if itemData.sockets and itemData.sockets[1] then
 		item.sockets = { }
 		item.itemSocketCount = 0
@@ -1034,6 +1113,14 @@ function ImportTabClass:ImportItem(itemData, slotName)
 			for line in line:gmatch("[^\n]+") do
 				local modList, extra = modLib.parseMod(line)
 				t_insert(item.explicitModLines, { line = line, extra = extra, mods = modList or { }, desecrated = true })
+			end
+		end
+	end
+	if itemData.mutatedMods then
+		for _, line in ipairs(itemData.mutatedMods) do
+			for line in line:gmatch("[^\n]+") do
+				local modList, extra = modLib.parseMod(line)
+				t_insert(item.explicitModLines, { line = line, extra = extra, mods = modList or { }, mutated = true })
 			end
 		end
 	end
